@@ -75,8 +75,9 @@ export default async function handler(req, res) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
   const MODELS = [
-    'claude-sonnet-4-20250514',
-    'claude-3-5-sonnet-20241022',
+    'claude-sonnet-4-6',
+    'claude-opus-4-7',
+    'claude-haiku-4-5-20251001',
   ]
 
   async function callWithFallback(params) {

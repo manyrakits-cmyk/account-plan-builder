@@ -29,7 +29,7 @@ export default async function handler(req, res) {
   }
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-  const MODELS = ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022']
+  const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
 
   const userPrompt = `Vygeneruj Account Plan z těchto dat sesbíraných v rozhovoru:\n\n${JSON.stringify(extractedData, null, 2)}`
 

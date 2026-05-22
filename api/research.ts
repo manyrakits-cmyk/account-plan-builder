@@ -70,7 +70,7 @@ export default async function handler(req: any, res: any) {
     ? `Firma: "${name}"\n\nInformace z vyhledávání:\n${searchContext}\n\nSestav draft Account Planu s hypotézami k ověření.`
     : `Firma: "${name}"\n\nSestav draft Account Planu z tréninkových dat. Pokud firmu neznáš, vyplň jen název a navrhni hypotézy k ověření.`
 
-  const MODELS = ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022']
+  const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
 
   for (let i = 0; i < MODELS.length; i++) {
     try {
