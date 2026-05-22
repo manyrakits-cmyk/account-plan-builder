@@ -1,3 +1,5 @@
+import type { AccountPlan } from './account-plan'
+
 export interface Message {
   id: string
   role: 'ai' | 'user'
@@ -15,4 +17,18 @@ export interface OutputData {
   json: string
 }
 
-export type AppStatus = 'auth' | 'onboarding' | 'interview' | 'generating' | 'done'
+export type AppStatus = 'auth' | 'onboarding' | 'project_list' | 'interview' | 'generating' | 'done'
+
+export interface SavedProject {
+  id: string
+  clientName: string
+  currentUser: string
+  status: 'in_progress' | 'done'
+  createdAt: string
+  updatedAt: string
+  messages: Message[]
+  chatHistory: ApiMessage[]
+  researchDraft: Partial<AccountPlan> | null
+  extractedData: Partial<AccountPlan> | null
+  outputData: OutputData | null
+}

@@ -9,7 +9,7 @@ export function OnboardingScreen() {
     e.preventDefault()
     if (!name.trim()) return
     setCurrentUser(name.trim())
-    setStatus('interview')
+    setStatus('project_list')
   }
 
   return (

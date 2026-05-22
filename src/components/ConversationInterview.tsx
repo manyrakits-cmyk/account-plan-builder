@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AccountPlan } from '../types/account-plan'
+import type { SavedProject } from '../types'
 import { useInterviewStore } from '../store/useInterviewStore'
+import { saveProject } from '../utils/storage'
 import { ChatBubble } from './ChatBubble'
 import { OutputPanel } from './OutputPanel'
 import { ProgressBar } from './ProgressBar'
@@ -8,23 +10,14 @@ import { ProgressBar } from './ProgressBar'
 type Phase = 'waiting_for_client' | 'researching' | 'chatting' | 'error'
 
 export function ConversationInterview() {
+  const store = useInterviewStore()
   const {
-    status,
-    currentUser,
-    messages,
-    chatHistory,
-    researchDraft,
-    extractedData,
-    outputData,
-    addMessage,
-    updateMessage,
-    initChatHistory,
-    appendChatHistory,
-    setResearchDraft,
-    setExtractedData,
-    setStatus,
-    setOutputData,
-  } = useInterviewStore()
+    status, currentUser, messages, chatHistory,
+    researchDraft, extractedData, outputData,
+    addMessage, updateMessage, initChatHistory, appendChatHistory,
+    setResearchDraft, setExtractedData, setStatus, setOutputData,
+    ensureProjectId, resetInterview,
+  } = store
 
   const [phase, setPhase] = useState<Phase>('waiting_for_client')
   const [inputValue, setInputValue] = useState('')
@@ -51,11 +44,17 @@ export function ConversationInterview() {
   useEffect(() => {
     if (initialized.current) return
     initialized.current = true
+
+    // Restoring a saved project that has chat history
+    if (messages.length > 0) {
+      if (chatHistory.length > 0) setPhase('chatting')
+      setTimeout(() => inputRef.current?.focus(), 100)
+      return
+    }
+
+    // Fresh interview
     const greeting = currentUser ? `Ahoj ${currentUser}!` : 'Ahoj!'
-    addMessage({
-      role: 'ai',
-      content: `${greeting} Pro koho děláme Account Plan? Zadej název klienta.`,
-    })
+    addMessage({ role: 'ai', content: `${greeting} Pro koho děláme Account Plan? Zadej název klienta.` })
     setTimeout(() => inputRef.current?.focus(), 300)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -63,16 +62,55 @@ export function ConversationInterview() {
   const isGenerating = status === 'generating'
   const inputDisabled = isProcessing || isDone || isGenerating || phase === 'researching' || phase === 'error'
 
+  // ─── Autosave ───────────────────────────────────────────────────────────────
+
+  function autosave(currentPhase: Phase) {
+    const s = useInterviewStore.getState()
+    const { id, createdAt } = s.ensureProjectId()
+    const clientName =
+      s.researchDraft?.nazevKlienta ??
+      s.messages.find((m) => m.role === 'user')?.content ??
+      'Nový projekt'
+
+    const project: SavedProject = {
+      id,
+      clientName,
+      currentUser: s.currentUser,
+      status: s.status === 'done' ? 'done' : 'in_progress',
+      createdAt,
+      updatedAt: new Date().toISOString(),
+      messages: s.messages,
+      chatHistory: s.chatHistory,
+      researchDraft: s.researchDraft,
+      extractedData: s.extractedData,
+      outputData: s.outputData,
+    }
+    saveProject(project)
+    void currentPhase // used only for naming clarity
+  }
+
+  // ─── Navigation ─────────────────────────────────────────────────────────────
+
+  function handleBack() {
+    autosave(phase)
+    resetInterview()
+    setStatus('project_list')
+  }
+
+  // ─── Restart (after error) ───────────────────────────────────────────────────
+
   function handleRestart() {
     const welcomeMsg = useInterviewStore.getState().messages[0]
-    useInterviewStore.getState().reset()
-    useInterviewStore.getState().setStatus('interview')
+    resetInterview()
+    setStatus('interview')
     useInterviewStore.getState().setCurrentUser(currentUser)
     if (welcomeMsg) useInterviewStore.getState().addMessage(welcomeMsg)
     setPhase('waiting_for_client')
     setInputValue('')
     setTimeout(() => inputRef.current?.focus(), 100)
   }
+
+  // ─── Send ────────────────────────────────────────────────────────────────────
 
   async function handleSend() {
     if (!inputValue.trim() || inputDisabled) return
@@ -87,17 +125,15 @@ export function ConversationInterview() {
     }
   }
 
+  // ─── Research ───────────────────────────────────────────────────────────────
+
   async function runResearch(companyName: string) {
     setPhase('researching')
     setIsProcessing(true)
+    ensureProjectId() // create project ID early so autosave has an ID
 
     const researchMsgId = `research-${Date.now()}`
-    addMessage({
-      id: researchMsgId,
-      role: 'ai',
-      content: `Dohledávám informace o ${companyName}…`,
-      isTyping: true,
-    })
+    addMessage({ id: researchMsgId, role: 'ai', content: `Dohledávám informace o ${companyName}…`, isTyping: true })
 
     let draft: Partial<AccountPlan> = { nazevKlienta: companyName }
     try {
@@ -112,13 +148,10 @@ export function ConversationInterview() {
         setResearchDraft(draft)
       }
     } catch {
-      // silently continue with minimal draft
+      // silently continue
     }
 
-    updateMessage(researchMsgId, {
-      content: `Dohledáno. Připravuji otázky k ${companyName}…`,
-      isTyping: true,
-    })
+    updateMessage(researchMsgId, { content: `Dohledáno. Připravuji otázky k ${companyName}…`, isTyping: true })
 
     const bootstrap = [{ role: 'user' as const, content: `Klient: ${companyName}` }]
     initChatHistory(bootstrap)
@@ -149,6 +182,7 @@ export function ConversationInterview() {
       }
 
       setPhase('chatting')
+      autosave('chatting')
       setTimeout(() => inputRef.current?.focus(), 100)
     } catch (err: any) {
       updateMessage(researchMsgId, { content: `Dohledávání selhalo.`, isTyping: false })
@@ -158,6 +192,8 @@ export function ConversationInterview() {
 
     setIsProcessing(false)
   }
+
+  // ─── Chat ────────────────────────────────────────────────────────────────────
 
   async function sendChatMessage(value: string) {
     setIsProcessing(true)
@@ -190,6 +226,7 @@ export function ConversationInterview() {
         return
       }
 
+      autosave('chatting')
       setTimeout(() => inputRef.current?.focus(), 100)
     } catch (err: any) {
       updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
@@ -198,6 +235,8 @@ export function ConversationInterview() {
 
     setIsProcessing(false)
   }
+
+  // ─── Generate output ─────────────────────────────────────────────────────────
 
   async function generateOutput(extracted: Partial<AccountPlan>) {
     setStatus('generating')
@@ -216,6 +255,7 @@ export function ConversationInterview() {
       updateMessage(genId, { content: 'Hotovo! Account Plan je připravený níže.', isTyping: false })
       setOutputData({ markdown: data.markdown, json: data.json })
       setStatus('done')
+      autosave('chatting')
     } catch {
       updateMessage(genId, { content: 'Generování se nezdařilo. Zkus to znovu.', isTyping: false })
       setStatus('interview')
@@ -223,6 +263,8 @@ export function ConversationInterview() {
 
     setIsProcessing(false)
   }
+
+  // ─── Input handlers ──────────────────────────────────────────────────────────
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -237,21 +279,31 @@ export function ConversationInterview() {
     e.target.style.height = `${Math.min(e.target.scrollHeight, 160)}px`
   }
 
+  // ─── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <div className="min-h-screen bg-gray-50 py-8 px-4">
       <div className="max-w-2xl mx-auto">
         {/* Header */}
-        <div className="mb-4">
-          <h2 className="text-base font-medium text-gray-900">Account Plan Interview</h2>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {isDone
-              ? 'Dokončeno ✓'
-              : isGenerating
-                ? 'Generuji Account Plan…'
-                : phase === 'researching'
-                  ? 'Dohledávám data…'
-                  : 'Konverzace probíhá'}
-          </p>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h2 className="text-base font-medium text-gray-900">Account Plan Interview</h2>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {isDone
+                ? 'Dokončeno ✓'
+                : isGenerating
+                  ? 'Generuji Account Plan…'
+                  : phase === 'researching'
+                    ? 'Dohledávám data…'
+                    : 'Konverzace probíhá'}
+            </p>
+          </div>
+          <button
+            onClick={handleBack}
+            className="text-xs text-gray-400 hover:text-gray-600 transition-colors mt-0.5"
+          >
+            ← Projekty
+          </button>
         </div>
 
         {/* Section progress */}
@@ -281,35 +333,45 @@ export function ConversationInterview() {
         {/* Input */}
         {!isDone && !isGenerating && phase !== 'error' && (
           <div>
-          <div className="flex gap-2 items-end">
-            <textarea
-              ref={inputRef}
-              value={inputValue}
-              onChange={handleTextareaChange}
-              onKeyDown={handleKeyDown}
-              placeholder={phase === 'waiting_for_client' ? 'Název klienta…' : 'Napiš odpověď…'}
-              rows={2}
-              disabled={inputDisabled}
-              className="flex-1 resize-none min-h-12 max-h-40 px-3 py-2.5 text-sm border border-gray-300 rounded-xl focus:outline-none focus:border-gray-500 bg-white disabled:opacity-50 leading-relaxed transition-colors"
-            />
-            <button
-              onClick={handleSend}
-              disabled={!inputValue.trim() || inputDisabled}
-              className="h-12 px-5 text-sm font-medium bg-gray-900 text-white rounded-xl hover:bg-gray-700 disabled:opacity-40 disabled:cursor-default transition-colors whitespace-nowrap"
-            >
-              Odeslat
-            </button>
-          </div>
+            <div className="flex gap-2 items-end">
+              <textarea
+                ref={inputRef}
+                value={inputValue}
+                onChange={handleTextareaChange}
+                onKeyDown={handleKeyDown}
+                placeholder={phase === 'waiting_for_client' ? 'Název klienta…' : 'Napiš odpověď…'}
+                rows={2}
+                disabled={inputDisabled}
+                className="flex-1 resize-none min-h-12 max-h-40 px-3 py-2.5 text-sm border border-gray-300 rounded-xl focus:outline-none focus:border-gray-500 bg-white disabled:opacity-50 leading-relaxed transition-colors"
+              />
+              <button
+                onClick={handleSend}
+                disabled={!inputValue.trim() || inputDisabled}
+                className="h-12 px-5 text-sm font-medium bg-gray-900 text-white rounded-xl hover:bg-gray-700 disabled:opacity-40 disabled:cursor-default transition-colors whitespace-nowrap"
+              >
+                Odeslat
+              </button>
+            </div>
 
-          {phase === 'chatting' && !inputDisabled && (
-            <button
-              onClick={() => sendChatMessage('přeskočit')}
-              className="mt-2 text-xs text-gray-400 underline hover:text-gray-600 transition-colors"
-            >
-              přeskočit téma
-            </button>
-          )}
+            {phase === 'chatting' && !inputDisabled && (
+              <button
+                onClick={() => sendChatMessage('přeskočit')}
+                className="mt-2 text-xs text-gray-400 underline hover:text-gray-600 transition-colors"
+              >
+                přeskočit téma
+              </button>
+            )}
           </div>
+        )}
+
+        {/* Back to projects after completion */}
+        {isDone && (
+          <button
+            onClick={handleBack}
+            className="mt-4 text-xs text-gray-500 underline hover:text-gray-700"
+          >
+            ← Zpět na seznam projektů
+          </button>
         )}
 
         {/* Output */}
