@@ -5,7 +5,7 @@ import { ChatBubble } from './ChatBubble'
 import { OutputPanel } from './OutputPanel'
 import { ProgressBar } from './ProgressBar'
 
-type Phase = 'waiting_for_client' | 'researching' | 'chatting'
+type Phase = 'waiting_for_client' | 'researching' | 'chatting' | 'error'
 
 export function ConversationInterview() {
   const {
@@ -61,7 +61,18 @@ export function ConversationInterview() {
 
   const isDone = status === 'done'
   const isGenerating = status === 'generating'
-  const inputDisabled = isProcessing || isDone || isGenerating || phase === 'researching'
+  const inputDisabled = isProcessing || isDone || isGenerating || phase === 'researching' || phase === 'error'
+
+  function handleRestart() {
+    const welcomeMsg = useInterviewStore.getState().messages[0]
+    useInterviewStore.getState().reset()
+    useInterviewStore.getState().setStatus('interview')
+    useInterviewStore.getState().setCurrentUser(currentUser)
+    if (welcomeMsg) useInterviewStore.getState().addMessage(welcomeMsg)
+    setPhase('waiting_for_client')
+    setInputValue('')
+    setTimeout(() => inputRef.current?.focus(), 100)
+  }
 
   async function handleSend() {
     if (!inputValue.trim() || inputDisabled) return
@@ -109,7 +120,6 @@ export function ConversationInterview() {
       isTyping: true,
     })
 
-    // Bootstrap chat with synthetic first user message
     const bootstrap = [{ role: 'user' as const, content: `Klient: ${companyName}` }]
     initChatHistory(bootstrap)
 
@@ -120,20 +130,12 @@ export function ConversationInterview() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: bootstrap,
-          currentUser,
-          initialData: draft,
-        }),
+        body: JSON.stringify({ messages: bootstrap, currentUser, initialData: draft }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
 
-      // Replace research loading bubble with research summary, then show agent reply
-      updateMessage(researchMsgId, {
-        content: `Mám pár věcí dohledaných o ${companyName}.`,
-        isTyping: false,
-      })
+      updateMessage(researchMsgId, { content: `Mám pár věcí dohledaných o ${companyName}.`, isTyping: false })
       updateMessage(typingId, { content: data.reply, isTyping: false })
       appendChatHistory({ role: 'assistant', content: data.reply })
 
@@ -145,9 +147,9 @@ export function ConversationInterview() {
 
       setPhase('chatting')
     } catch {
-      updateMessage(researchMsgId, { content: `Dohledávání selhalo, pokračujeme dál.`, isTyping: false })
-      updateMessage(typingId, { content: 'Něco se pokazilo. Zkus to znovu.', isTyping: false })
-      setPhase('chatting')
+      updateMessage(researchMsgId, { content: `Dohledávání selhalo.`, isTyping: false })
+      updateMessage(typingId, { content: 'Chat API není dostupné.', isTyping: false })
+      setPhase('error')
     }
 
     setIsProcessing(false)
@@ -167,11 +169,7 @@ export function ConversationInterview() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: newHistory,
-          currentUser,
-          initialData: researchDraft,
-        }),
+        body: JSON.stringify({ messages: newHistory, currentUser, initialData: researchDraft }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
@@ -185,7 +183,8 @@ export function ConversationInterview() {
         return
       }
     } catch {
-      updateMessage(typingId, { content: 'Něco se pokazilo – zkus to znovu.', isTyping: false })
+      updateMessage(typingId, { content: 'Chat API není dostupné.', isTyping: false })
+      setPhase('error')
     }
 
     setIsProcessing(false)
@@ -257,8 +256,21 @@ export function ConversationInterview() {
           <div ref={chatEndRef} />
         </div>
 
+        {/* Error recovery */}
+        {phase === 'error' && !isDone && (
+          <div className="flex items-center gap-3 mt-2 mb-4">
+            <p className="text-xs text-gray-400">Chat API není dostupné.</p>
+            <button
+              onClick={handleRestart}
+              className="text-xs px-3 py-1.5 border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"
+            >
+              Začít znovu
+            </button>
+          </div>
+        )}
+
         {/* Input */}
-        {!isDone && !isGenerating && (
+        {!isDone && !isGenerating && phase !== 'error' && (
           <div className="flex gap-2 items-end">
             <textarea
               ref={inputRef}
