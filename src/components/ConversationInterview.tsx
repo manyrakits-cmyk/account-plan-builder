@@ -149,6 +149,7 @@ export function ConversationInterview() {
       }
 
       setPhase('chatting')
+      setTimeout(() => inputRef.current?.focus(), 100)
     } catch (err: any) {
       updateMessage(researchMsgId, { content: `Dohledávání selhalo.`, isTyping: false })
       updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
@@ -188,6 +189,8 @@ export function ConversationInterview() {
         await generateOutput(data.extractedData)
         return
       }
+
+      setTimeout(() => inputRef.current?.focus(), 100)
     } catch (err: any) {
       updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
       setPhase('error')
