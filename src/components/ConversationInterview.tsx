@@ -1,27 +1,32 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AccountPlan } from '../types/account-plan'
-import type { Message } from '../types'
 import { useInterviewStore } from '../store/useInterviewStore'
 import { ChatBubble } from './ChatBubble'
 import { OutputPanel } from './OutputPanel'
 import { ProgressBar } from './ProgressBar'
 
-const WELCOME =
-  'Ahoj! Pomohu ti vyplnit Account Plan formou přirozeného rozhovoru. Klidně odpovídej jak ti to přijde – sám se zeptám na co ještě chybí. Enter odešle, Shift+Enter nový řádek.'
+type Phase = 'waiting_for_client' | 'researching' | 'chatting'
 
 export function ConversationInterview() {
   const {
     status,
+    currentUser,
     messages,
+    chatHistory,
+    researchDraft,
     extractedData,
     outputData,
     addMessage,
     updateMessage,
+    initChatHistory,
+    appendChatHistory,
+    setResearchDraft,
     setExtractedData,
     setStatus,
     setOutputData,
   } = useInterviewStore()
 
+  const [phase, setPhase] = useState<Phase>('waiting_for_client')
   const [inputValue, setInputValue] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
@@ -46,23 +51,68 @@ export function ConversationInterview() {
   useEffect(() => {
     if (initialized.current) return
     initialized.current = true
-    addMessage({ role: 'ai', content: WELCOME })
+    const greeting = currentUser ? `Ahoj ${currentUser}!` : 'Ahoj!'
+    addMessage({
+      role: 'ai',
+      content: `${greeting} Pro koho děláme Account Plan? Zadej název klienta.`,
+    })
     setTimeout(() => inputRef.current?.focus(), 300)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const isDone = status === 'done'
   const isGenerating = status === 'generating'
-  const inputDisabled = isProcessing || isDone || isGenerating
+  const inputDisabled = isProcessing || isDone || isGenerating || phase === 'researching'
 
   async function handleSend() {
     if (!inputValue.trim() || inputDisabled) return
     const value = inputValue.trim()
     setInputValue('')
+
+    if (phase === 'waiting_for_client') {
+      addMessage({ role: 'user', content: value })
+      await runResearch(value)
+    } else {
+      await sendChatMessage(value)
+    }
+  }
+
+  async function runResearch(companyName: string) {
+    setPhase('researching')
     setIsProcessing(true)
 
-    addMessage({ role: 'user', content: value })
+    const researchMsgId = `research-${Date.now()}`
+    addMessage({
+      id: researchMsgId,
+      role: 'ai',
+      content: `Dohledávám informace o ${companyName}…`,
+      isTyping: true,
+    })
 
-    const apiMessages = buildApiMessages(messages, value)
+    let draft: Partial<AccountPlan> = { nazevKlienta: companyName }
+    try {
+      const res = await fetch('/api/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyName }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        draft = { ...data.draft, nazevKlienta: companyName }
+        setResearchDraft(draft)
+      }
+    } catch {
+      // silently continue with minimal draft
+    }
+
+    updateMessage(researchMsgId, {
+      content: `Dohledáno. Připravuji otázky k ${companyName}…`,
+      isTyping: true,
+    })
+
+    // Bootstrap chat with synthetic first user message
+    const bootstrap = [{ role: 'user' as const, content: `Klient: ${companyName}` }]
+    initChatHistory(bootstrap)
+
     const typingId = `typing-${Date.now()}`
     addMessage({ id: typingId, role: 'ai', content: '…', isTyping: true })
 
@@ -70,12 +120,64 @@ export function ConversationInterview() {
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages }),
+        body: JSON.stringify({
+          messages: bootstrap,
+          currentUser,
+          initialData: draft,
+        }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+
+      // Replace research loading bubble with research summary, then show agent reply
+      updateMessage(researchMsgId, {
+        content: `Mám pár věcí dohledaných o ${companyName}.`,
+        isTyping: false,
+      })
+      updateMessage(typingId, { content: data.reply, isTyping: false })
+      appendChatHistory({ role: 'assistant', content: data.reply })
+
+      if (data.isComplete && data.extractedData) {
+        setExtractedData(data.extractedData)
+        await generateOutput(data.extractedData)
+        return
+      }
+
+      setPhase('chatting')
+    } catch {
+      updateMessage(researchMsgId, { content: `Dohledávání selhalo, pokračujeme dál.`, isTyping: false })
+      updateMessage(typingId, { content: 'Něco se pokazilo. Zkus to znovu.', isTyping: false })
+      setPhase('chatting')
+    }
+
+    setIsProcessing(false)
+  }
+
+  async function sendChatMessage(value: string) {
+    setIsProcessing(true)
+    addMessage({ role: 'user', content: value })
+
+    const newHistory = [...chatHistory, { role: 'user' as const, content: value }]
+    appendChatHistory({ role: 'user', content: value })
+
+    const typingId = `typing-${Date.now()}`
+    addMessage({ id: typingId, role: 'ai', content: '…', isTyping: true })
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: newHistory,
+          currentUser,
+          initialData: researchDraft,
+        }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const data = await res.json()
 
       updateMessage(typingId, { content: data.reply, isTyping: false })
+      appendChatHistory({ role: 'assistant', content: data.reply })
 
       if (data.isComplete && data.extractedData) {
         setExtractedData(data.extractedData)
@@ -83,10 +185,7 @@ export function ConversationInterview() {
         return
       }
     } catch {
-      updateMessage(typingId, {
-        content: 'Něco se pokazilo – zkus to znovu.',
-        isTyping: false,
-      })
+      updateMessage(typingId, { content: 'Něco se pokazilo – zkus to znovu.', isTyping: false })
     }
 
     setIsProcessing(false)
@@ -137,7 +236,13 @@ export function ConversationInterview() {
         <div className="mb-4">
           <h2 className="text-base font-medium text-gray-900">Account Plan Interview</h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            {isDone ? 'Dokončeno ✓' : isGenerating ? 'Generuji Account Plan…' : 'Konverzace probíhá'}
+            {isDone
+              ? 'Dokončeno ✓'
+              : isGenerating
+                ? 'Generuji Account Plan…'
+                : phase === 'researching'
+                  ? 'Dohledávám data…'
+                  : 'Konverzace probíhá'}
           </p>
         </div>
 
@@ -160,7 +265,7 @@ export function ConversationInterview() {
               value={inputValue}
               onChange={handleTextareaChange}
               onKeyDown={handleKeyDown}
-              placeholder="Napiš odpověď…"
+              placeholder={phase === 'waiting_for_client' ? 'Název klienta…' : 'Napiš odpověď…'}
               rows={2}
               disabled={inputDisabled}
               className="flex-1 resize-none min-h-12 max-h-40 px-3 py-2.5 text-sm border border-gray-300 rounded-xl focus:outline-none focus:border-gray-500 bg-white disabled:opacity-50 leading-relaxed transition-colors"
@@ -180,16 +285,4 @@ export function ConversationInterview() {
       </div>
     </div>
   )
-}
-
-function buildApiMessages(storeMessages: Message[], newValue: string) {
-  const firstUserIdx = storeMessages.findIndex((m) => m.role === 'user')
-  const slice = firstUserIdx >= 0 ? storeMessages.slice(firstUserIdx) : []
-  const history = slice
-    .filter((m) => !m.isTyping)
-    .map((m) => ({
-      role: m.role === 'ai' ? ('assistant' as const) : ('user' as const),
-      content: m.content,
-    }))
-  return [...history, { role: 'user' as const, content: newValue }]
 }

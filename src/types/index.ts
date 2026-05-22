@@ -5,9 +5,14 @@ export interface Message {
   isTyping?: boolean
 }
 
+export interface ApiMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface OutputData {
   markdown: string
   json: string
 }
 
-export type AppStatus = 'auth' | 'interview' | 'generating' | 'done'
+export type AppStatus = 'auth' | 'onboarding' | 'interview' | 'generating' | 'done'

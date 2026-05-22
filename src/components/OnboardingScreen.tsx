@@ -1,20 +1,15 @@
 import { useState } from 'react'
 import { useInterviewStore } from '../store/useInterviewStore'
 
-export function AccessGate() {
-  const [code, setCode] = useState('')
-  const [error, setError] = useState(false)
-  const setStatus = useInterviewStore((s) => s.setStatus)
+export function OnboardingScreen() {
+  const [name, setName] = useState('')
+  const { setCurrentUser, setStatus } = useInterviewStore()
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    const expected = import.meta.env.VITE_ACCESS_CODE
-    if (code === expected) {
-      setStatus('onboarding')
-    } else {
-      setError(true)
-      setCode('')
-    }
+    if (!name.trim()) return
+    setCurrentUser(name.trim())
+    setStatus('interview')
   }
 
   return (
@@ -27,29 +22,23 @@ export function AccessGate() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
-            <label className="block text-sm text-gray-700 mb-1.5">Přístupový kód</label>
+            <label className="block text-sm text-gray-700 mb-1.5">Jak se jmenuješ?</label>
             <input
-              type="password"
-              value={code}
-              onChange={(e) => {
-                setCode(e.target.value)
-                setError(false)
-              }}
-              placeholder="Zadej přístupový kód"
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Tvoje jméno"
               autoFocus
               className="w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:border-gray-500 bg-white transition-colors"
             />
-            {error && (
-              <p className="text-xs text-red-500 mt-1.5">Nesprávný kód. Zkus to znovu.</p>
-            )}
           </div>
 
           <button
             type="submit"
-            disabled={!code}
+            disabled={!name.trim()}
             className="w-full py-2.5 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 disabled:opacity-40 disabled:cursor-default transition-colors"
           >
-            Vstoupit
+            Začít
           </button>
         </form>
       </div>

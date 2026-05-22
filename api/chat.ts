@@ -1,12 +1,27 @@
 import Anthropic from '@anthropic-ai/sdk'
+import type { AccountPlan } from '../src/types/account-plan'
 import { AGENT_SYSTEM_PROMPT } from '../src/prompts/agent'
 
 export const config = { maxDuration: 30 }
 
+function buildSystemPrompt(currentUser: string, initialData: Partial<AccountPlan> | null): string {
+  let prompt = AGENT_SYSTEM_PROMPT
+
+  if (currentUser) {
+    prompt = `Uživatel který s tebou mluví je: ${currentUser}. Nikdy se ho neptej na jeho jméno – už ho znáš.\n\n${prompt}`
+  }
+
+  if (initialData && Object.keys(initialData).length > 0) {
+    prompt += `\n\nINICIÁLNÍ DATA Z RESEARCH FÁZE (dohledáno z veřejných zdrojů – ověř s uživatelem):\n${JSON.stringify(initialData, null, 2)}`
+  }
+
+  return prompt
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  const { messages } = req.body ?? {}
+  const { messages, currentUser = '', initialData = null } = req.body ?? {}
   if (!Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Missing messages' })
   }
@@ -17,7 +32,7 @@ export default async function handler(req: any, res: any) {
     const response = await client.messages.create({
       model: 'claude-sonnet-4-5',
       max_tokens: 1024,
-      system: AGENT_SYSTEM_PROMPT,
+      system: buildSystemPrompt(currentUser, initialData),
       messages,
     })
 
