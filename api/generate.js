@@ -23,32 +23,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' })
   }
 
-  const { answers } = req.body ?? {}
-  if (!answers) {
-    return res.status(400).json({ error: 'Missing answers' })
+  const { extractedData } = req.body ?? {}
+  if (!extractedData) {
+    return res.status(400).json({ error: 'Missing extractedData' })
   }
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-  const userPrompt = `Odpovědi z interview:
-- Název klienta: ${answers.client_name || ''}
-- Account owner: ${answers.owner || ''}
-- Obor a popis: ${answers.industry || ''}
-- Velikost firmy: ${answers.size || ''}
-- Stav vztahu (celkový): ${answers.relationship_overall || ''}
-- Stav vztahu (po osobách): ${answers.relationship_detail || ''}
-- Rozhodovači: ${answers.decision_makers || ''}
-- IT kontakty: ${answers.it_contacts || ''}
-- Ostatní stakeholdeři: ${answers.others || ''}
-- Steering: ${answers.steering || ''}
-- Oblasti spolupráce: ${answers.areas || ''}
-- Roční objem: ${answers.budget_annual || ''}
-- Rozložení budgetu: ${answers.budget_breakdown || ''}
-- Strategická rizika: ${answers.strategic_risks || ''}
-- Oportunity: ${answers.opportunities || ''}
-- Cíle: ${answers.goals || ''}
-- Aktivity: ${answers.activities || ''}
-- Potřeba zásahu vedení: ${answers.mgmt_needed || ''}`
+  const userPrompt = `Vygeneruj Account Plan z těchto dat sesbíraných v rozhovoru:\n\n${JSON.stringify(extractedData, null, 2)}`
 
   try {
     const message = await client.messages.create({
