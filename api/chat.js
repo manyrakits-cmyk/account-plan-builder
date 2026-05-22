@@ -74,9 +74,24 @@ export default async function handler(req, res) {
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
+  const MODELS = [
+    'claude-sonnet-4-20250514',
+    'claude-3-5-sonnet-20241022',
+  ]
+
+  async function callWithFallback(params) {
+    for (let i = 0; i < MODELS.length; i++) {
+      try {
+        return await client.messages.create({ ...params, model: MODELS[i] })
+      } catch (err) {
+        if (i === MODELS.length - 1) throw err
+        console.warn(`[chat] model ${MODELS[i]} failed: ${err?.message}, trying next`)
+      }
+    }
+  }
+
   try {
-    const response = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const response = await callWithFallback({
       max_tokens: 1024,
       system: buildSystemPrompt(currentUser, initialData),
       messages,
@@ -98,6 +113,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ reply: text, isComplete: false, extractedData: null })
   } catch (err) {
     console.error('[chat]', err?.message ?? err)
-    return res.status(500).json({ error: 'Chat failed', detail: err?.message })
+    return res.status(500).json({ error: 'Chat failed', detail: String(err?.message ?? err) })
   }
 }

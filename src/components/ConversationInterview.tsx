@@ -132,7 +132,10 @@ export function ConversationInterview() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: bootstrap, currentUser, initialData: draft }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        throw new Error(errBody.detail ?? `HTTP ${res.status}`)
+      }
       const data = await res.json()
 
       updateMessage(researchMsgId, { content: `Mám pár věcí dohledaných o ${companyName}.`, isTyping: false })
@@ -146,9 +149,9 @@ export function ConversationInterview() {
       }
 
       setPhase('chatting')
-    } catch {
+    } catch (err: any) {
       updateMessage(researchMsgId, { content: `Dohledávání selhalo.`, isTyping: false })
-      updateMessage(typingId, { content: 'Chat API není dostupné.', isTyping: false })
+      updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
       setPhase('error')
     }
 
@@ -171,7 +174,10 @@ export function ConversationInterview() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: newHistory, currentUser, initialData: researchDraft }),
       })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        throw new Error(errBody.detail ?? `HTTP ${res.status}`)
+      }
       const data = await res.json()
 
       updateMessage(typingId, { content: data.reply, isTyping: false })
@@ -182,8 +188,8 @@ export function ConversationInterview() {
         await generateOutput(data.extractedData)
         return
       }
-    } catch {
-      updateMessage(typingId, { content: 'Chat API není dostupné.', isTyping: false })
+    } catch (err: any) {
+      updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
       setPhase('error')
     }
 
@@ -271,6 +277,7 @@ export function ConversationInterview() {
 
         {/* Input */}
         {!isDone && !isGenerating && phase !== 'error' && (
+          <div>
           <div className="flex gap-2 items-end">
             <textarea
               ref={inputRef}
@@ -289,6 +296,16 @@ export function ConversationInterview() {
             >
               Odeslat
             </button>
+          </div>
+
+          {phase === 'chatting' && !inputDisabled && (
+            <button
+              onClick={() => sendChatMessage('přeskočit')}
+              className="mt-2 text-xs text-gray-400 underline hover:text-gray-600 transition-colors"
+            >
+              přeskočit téma
+            </button>
+          )}
           </div>
         )}
 

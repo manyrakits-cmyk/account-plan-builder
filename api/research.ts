@@ -2,9 +2,9 @@ import Anthropic from '@anthropic-ai/sdk'
 
 export const config = { maxDuration: 30 }
 
-const SYSTEM_PROMPT = `Jsi research asistent. Dohledej maximum informací o zadané firmě z veřejných zdrojů. Sestav draft Account Planu.
+const SYSTEM_PROMPT = `Jsi research asistent. Na základě poskytnutých informací o firmě sestav draft Account Planu.
 
-Vyplň co víš s jistotou. Pole která nevíš nech prázdná nebo označ jako "k ověření".
+Vyplň co víš s jistotou. Pole která nevíš nech prázdná.
 
 Vrať POUZE čistý JSON (bez markdown bloků) v tomto schématu:
 {
@@ -21,17 +21,36 @@ Vrať POUZE čistý JSON (bez markdown bloků) v tomto schématu:
   "oportunity": [],
   "strategickeCile": [],
   "klicoveAktivity": [],
-  "hypotezy": [
-    "...",
-    "..."
-  ]
+  "hypotezy": ["...", "..."]
 }
 
-Pole "hypotezy" obsahuje 3-5 konkrétních tvrzení k ověření s uživatelem.
-Příklady hypotéz:
-- "Orea Hotels jsou hotelový řetězec s 20+ hotely v ČR, ~600 zaměstnanců – sedí?"
-- "Primární oblast spolupráce je IT pro hotelový provoz – nebo něco jiného?"
-- "Roční objem spolupráce kolem 4 mil. CZK – nebo jiné číslo?"`
+Pole "hypotezy" obsahuje 3-5 konkrétních tvrzení k ověření s uživatelem ve formátu otázky.
+Příklady: "Orea Hotels jsou hotelový řetězec s 20+ hotely v ČR – sedí to?" nebo "Primární oblast spolupráce je IT provoz – nebo něco jiného?"`
+
+async function searchViaTavily(companyName: string): Promise<string> {
+  const key = process.env.TAVILY_API_KEY
+  if (!key) return ''
+
+  try {
+    const res = await fetch('https://api.tavily.com/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        api_key: key,
+        query: `${companyName} firma profil obor velikost počet zaměstnanců`,
+        search_depth: 'basic',
+        max_results: 5,
+        include_answer: true,
+      }),
+    })
+    if (!res.ok) return ''
+    const data = await res.json()
+    const snippets = (data.results ?? []).map((r: any) => `${r.title}: ${r.content}`).join('\n')
+    return data.answer ? `${data.answer}\n\n${snippets}` : snippets
+  } catch {
+    return ''
+  }
+}
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).end()
@@ -41,82 +60,43 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Missing companyName' })
   }
 
+  const name = companyName.trim()
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
-  try {
-    // Try with web_search tool (beta)
-    const messages: any[] = [
-      { role: 'user', content: `Dohledej informace o firmě: "${companyName.trim()}" a sestav draft Account Planu s hypotézami k ověření.` },
-    ]
+  // Gather search context (Tavily if available, empty string otherwise)
+  const searchContext = await searchViaTavily(name)
 
-    let finalText = ''
+  const userMessage = searchContext
+    ? `Firma: "${name}"\n\nInformace z vyhledávání:\n${searchContext}\n\nSestav draft Account Planu s hypotézami k ověření.`
+    : `Firma: "${name}"\n\nSestav draft Account Planu z tréninkových dat. Pokud firmu neznáš, vyplň jen název a navrhni hypotézy k ověření.`
 
-    for (let i = 0; i < 5; i++) {
-      const response: any = await (client.messages.create as any)(
-        {
-          model: 'claude-sonnet-4-20250514',
-          max_tokens: 2048,
-          system: SYSTEM_PROMPT,
-          tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-          messages,
-        },
-        { headers: { 'anthropic-beta': 'web-search-2025-03-05' } },
-      )
+  const MODELS = ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022']
 
-      const textBlocks = response.content
-        .filter((b: any) => b.type === 'text')
-        .map((b: any) => b.text as string)
-
-      if (response.stop_reason === 'end_turn') {
-        finalText = textBlocks.join('')
-        break
-      }
-
-      if (response.stop_reason === 'tool_use') {
-        messages.push({ role: 'assistant', content: response.content })
-        const toolResults = response.content
-          .filter((b: any) => b.type === 'tool_use')
-          .map((b: any) => ({ type: 'tool_result', tool_use_id: b.id, content: '' }))
-        if (toolResults.length > 0) {
-          messages.push({ role: 'user', content: toolResults })
-        }
-      } else {
-        // Unexpected stop reason – take whatever text we have
-        finalText = textBlocks.join('')
-        break
-      }
-    }
-
-    if (!finalText) throw new Error('No output from research')
-
-    const jsonStr = finalText.replace(/^```json\s*|^```\s*|```\s*$/gm, '').trim()
-    const parsed = JSON.parse(jsonStr)
-    const { hypotezy, ...draft } = parsed
-
-    return res.status(200).json({ draft, hypotezy: hypotezy ?? [] })
-  } catch (err) {
-    console.error('[research] web_search failed, falling back:', err)
-
-    // Fallback: training knowledge only
+  for (let i = 0; i < MODELS.length; i++) {
     try {
-      const fallback = await client.messages.create({
-        model: 'claude-sonnet-4-20250514',
+      const response = await client.messages.create({
+        model: MODELS[i],
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
-        messages: [
-          { role: 'user', content: `Sestav draft Account Planu pro firmu: "${companyName.trim()}". Použij jen co znáš ze svých tréninkových dat.` },
-        ],
+        messages: [{ role: 'user', content: userMessage }],
       })
-      const text = fallback.content
-        .filter((b) => b.type === 'text')
-        .map((b) => (b as any).text as string)
+
+      const text = response.content
+        .filter((b: any) => b.type === 'text')
+        .map((b: any) => b.text as string)
         .join('')
+
       const jsonStr = text.replace(/^```json\s*|^```\s*|```\s*$/gm, '').trim()
       const parsed = JSON.parse(jsonStr)
       const { hypotezy, ...draft } = parsed
+
       return res.status(200).json({ draft, hypotezy: hypotezy ?? [] })
-    } catch {
-      return res.status(200).json({ draft: { nazevKlienta: companyName }, hypotezy: [] })
+    } catch (err) {
+      if (i === MODELS.length - 1) {
+        console.error('[research] all models failed:', err)
+        return res.status(200).json({ draft: { nazevKlienta: name }, hypotezy: [] })
+      }
+      console.warn(`[research] model ${MODELS[i]} failed, trying next`)
     }
   }
 }

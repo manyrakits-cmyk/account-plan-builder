@@ -29,12 +29,23 @@ export default async function handler(req, res) {
   }
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+  const MODELS = ['claude-sonnet-4-20250514', 'claude-3-5-sonnet-20241022']
 
   const userPrompt = `Vygeneruj Account Plan z těchto dat sesbíraných v rozhovoru:\n\n${JSON.stringify(extractedData, null, 2)}`
 
+  async function callWithFallback(params) {
+    for (let i = 0; i < MODELS.length; i++) {
+      try {
+        return await client.messages.create({ ...params, model: MODELS[i] })
+      } catch (err) {
+        if (i === MODELS.length - 1) throw err
+        console.warn(`[generate] model ${MODELS[i]} failed, trying next`)
+      }
+    }
+  }
+
   try {
-    const message = await client.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const message = await callWithFallback({
       max_tokens: 2500,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userPrompt }],
