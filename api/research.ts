@@ -54,7 +54,7 @@ export default async function handler(req: any, res: any) {
     for (let i = 0; i < 5; i++) {
       const response: any = await (client.messages.create as any)(
         {
-          model: 'claude-sonnet-4-5',
+          model: 'claude-sonnet-4-6',
           max_tokens: 2048,
           system: SYSTEM_PROMPT,
           tools: [{ type: 'web_search_20250305', name: 'web_search' }],
@@ -100,7 +100,7 @@ export default async function handler(req: any, res: any) {
     // Fallback: training knowledge only
     try {
       const fallback = await client.messages.create({
-        model: 'claude-sonnet-4-5',
+        model: 'claude-sonnet-4-6',
         max_tokens: 1024,
         system: SYSTEM_PROMPT,
         messages: [
