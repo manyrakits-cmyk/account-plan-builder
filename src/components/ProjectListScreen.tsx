@@ -1,9 +1,11 @@
 import { useState } from 'react'
 import { useInterviewStore } from '../store/useInterviewStore'
 import { deleteProject, formatProjectDate, listProjects, loadProject } from '../utils/storage'
+import { ImportModal } from './ImportModal'
 
 export function ProjectListScreen() {
   const [projects, setProjects] = useState(listProjects)
+  const [importOpen, setImportOpen] = useState(false)
   const { currentUser, loadProjectState, resetInterview, setStatus } = useInterviewStore()
 
   function handleNew() {
@@ -31,12 +33,20 @@ export function ProjectListScreen() {
             <h1 className="text-base font-medium text-gray-900">Account Plany</h1>
             {currentUser && <p className="text-xs text-gray-400 mt-0.5">{currentUser}</p>}
           </div>
-          <button
-            onClick={handleNew}
-            className="px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors"
-          >
-            + Nový Account Plan
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setImportOpen(true)}
+              className="px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 text-gray-600 transition-colors"
+            >
+              Importovat JSON
+            </button>
+            <button
+              onClick={handleNew}
+              className="px-4 py-2 text-sm font-medium bg-gray-900 text-white rounded-lg hover:bg-gray-700 transition-colors"
+            >
+              + Nový Account Plan
+            </button>
+          </div>
         </div>
 
         {projects.length === 0 ? (
@@ -92,6 +102,14 @@ export function ProjectListScreen() {
           </div>
         )}
       </div>
+
+      {importOpen && (
+        <ImportModal
+          currentUser={currentUser}
+          onClose={() => setImportOpen(false)}
+          onImported={() => { setProjects(listProjects()); setImportOpen(false) }}
+        />
+      )}
     </div>
   )
 }
