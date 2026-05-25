@@ -1,5 +1,4 @@
 import Anthropic from '@anthropic-ai/sdk'
-import mammoth from 'mammoth'
 
 export const config = { maxDuration: 30 }
 
@@ -30,17 +29,22 @@ Pole "hypotezy" obsahuje 3-5 konkrétních tvrzení k ověření s uživatelem v
 
 const MAX_TEXT_CHARS = 10_000
 
-function cleanText(raw) {
-  return raw
+function cleanAndTruncate(text) {
+  const clean = text
     .replace(/<\/?account_plan_json>/g, '')
     .replace(/<\/?search_query>/g, '')
     .trim()
+  if (clean.length <= MAX_TEXT_CHARS) return clean
+  return clean.slice(0, MAX_TEXT_CHARS) + '\n\n[...zkráceno...]'
 }
 
-function truncate(text) {
-  const clean = cleanText(text)
-  if (clean.length <= MAX_TEXT_CHARS) return clean
-  return clean.slice(0, MAX_TEXT_CHARS) + '\n\n[...dokument zkrácen pro zpracování...]'
+async function extractDocxText(buffer) {
+  // Dynamic import to avoid ESM/CJS issues with mammoth
+  const mammoth = await import('mammoth')
+  const fn = mammoth.extractRawText ?? mammoth.default?.extractRawText
+  if (typeof fn !== 'function') throw new Error('mammoth.extractRawText not available')
+  const result = await fn({ buffer })
+  return result.value ?? ''
 }
 
 async function fileToContentBlock(file) {
@@ -55,10 +59,10 @@ async function fileToContentBlock(file) {
 
   if (mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document') {
     const buffer = Buffer.from(data, 'base64')
-    const result = await mammoth.extractRawText({ buffer })
+    const rawText = await extractDocxText(buffer)
     return {
       type: 'text',
-      text: `[Dokument: ${name}]\n${truncate(result.value)}`,
+      text: `[Dokument: ${name}]\n${cleanAndTruncate(rawText)}`,
     }
   }
 
@@ -66,7 +70,7 @@ async function fileToContentBlock(file) {
   const text = Buffer.from(data, 'base64').toString('utf-8')
   return {
     type: 'text',
-    text: `[Dokument: ${name}]\n${truncate(text)}`,
+    text: `[Dokument: ${name}]\n${cleanAndTruncate(text)}`,
   }
 }
 
@@ -78,14 +82,13 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Missing files' })
   }
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-
   let contentBlocks
   try {
     contentBlocks = await Promise.all(files.map(fileToContentBlock))
+    console.log('[extract-docs] content blocks built:', contentBlocks.map((b) => b.type))
   } catch (err) {
-    console.error('[extract-docs] file processing error:', err)
-    return res.status(400).json({ error: 'Nepodařilo se zpracovat soubor.' })
+    console.error('[extract-docs] file processing failed:', err.message)
+    return res.status(400).json({ error: `Nepodařilo se zpracovat soubor: ${err.message}` })
   }
 
   const contextText = companyName
@@ -97,12 +100,14 @@ export default async function handler(req, res) {
     { type: 'text', text: contextText },
   ]
 
+  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
   const MODELS = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6']
 
   for (let i = 0; i < MODELS.length; i++) {
+    const model = MODELS[i]
     try {
       const response = await client.messages.create({
-        model: MODELS[i],
+        model,
         max_tokens: 900,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userContent }],
@@ -114,16 +119,22 @@ export default async function handler(req, res) {
         .join('')
 
       const jsonStr = text.replace(/^```json\s*|^```\s*|```\s*$/gm, '').trim()
-      const parsed = JSON.parse(jsonStr)
-      const { hypotezy, ...draft } = parsed
 
-      return res.status(200).json({ draft, hypotezy: hypotezy ?? [] })
-    } catch (err) {
-      if (i === MODELS.length - 1) {
-        console.error('[extract-docs] all models failed:', err)
-        return res.status(500).json({ error: 'Extrakce selhala.' })
+      try {
+        const parsed = JSON.parse(jsonStr)
+        const { hypotezy, ...draft } = parsed
+        return res.status(200).json({ draft, hypotezy: hypotezy ?? [] })
+      } catch (parseErr) {
+        console.error(`[extract-docs] JSON parse failed for ${model}. Response: ${text.slice(0, 300)}`)
+        throw parseErr
       }
-      console.warn(`[extract-docs] model ${MODELS[i]} failed, trying next`)
+    } catch (err) {
+      const detail = err?.status ? `HTTP ${err.status}: ${err.message}` : err.message
+      if (i === MODELS.length - 1) {
+        console.error(`[extract-docs] all models failed. Last error (${model}): ${detail}`)
+        return res.status(500).json({ error: 'Extrakce selhala.', detail })
+      }
+      console.warn(`[extract-docs] ${model} failed (${detail}), trying next`)
     }
   }
 }
