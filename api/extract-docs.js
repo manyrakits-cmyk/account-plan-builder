@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import mammoth from 'mammoth'
 
-export const config = { maxDuration: 60 }
+export const config = { maxDuration: 30 }
 
 const SYSTEM_PROMPT = `Jsi research asistent. Na základě poskytnutých dokumentů sestav draft Account Planu.
 
@@ -28,6 +28,21 @@ Vrať POUZE čistý JSON (bez markdown bloků) v tomto schématu:
 
 Pole "hypotezy" obsahuje 3-5 konkrétních tvrzení k ověření s uživatelem ve formátu otázky.`
 
+const MAX_TEXT_CHARS = 10_000
+
+function cleanText(raw) {
+  return raw
+    .replace(/<\/?account_plan_json>/g, '')
+    .replace(/<\/?search_query>/g, '')
+    .trim()
+}
+
+function truncate(text) {
+  const clean = cleanText(text)
+  if (clean.length <= MAX_TEXT_CHARS) return clean
+  return clean.slice(0, MAX_TEXT_CHARS) + '\n\n[...dokument zkrácen pro zpracování...]'
+}
+
 async function fileToContentBlock(file) {
   const { name, mimeType, data } = file
 
@@ -43,7 +58,7 @@ async function fileToContentBlock(file) {
     const result = await mammoth.extractRawText({ buffer })
     return {
       type: 'text',
-      text: `[Dokument: ${name}]\n${result.value}`,
+      text: `[Dokument: ${name}]\n${truncate(result.value)}`,
     }
   }
 
@@ -51,7 +66,7 @@ async function fileToContentBlock(file) {
   const text = Buffer.from(data, 'base64').toString('utf-8')
   return {
     type: 'text',
-    text: `[Dokument: ${name}]\n${text}`,
+    text: `[Dokument: ${name}]\n${truncate(text)}`,
   }
 }
 
@@ -82,13 +97,13 @@ export default async function handler(req, res) {
     { type: 'text', text: contextText },
   ]
 
-  const MODELS = ['claude-sonnet-4-6', 'claude-haiku-4-5-20251001']
+  const MODELS = ['claude-haiku-4-5-20251001', 'claude-sonnet-4-6']
 
   for (let i = 0; i < MODELS.length; i++) {
     try {
       const response = await client.messages.create({
         model: MODELS[i],
-        max_tokens: 1500,
+        max_tokens: 900,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userContent }],
       })
