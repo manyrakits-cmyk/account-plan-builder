@@ -108,7 +108,7 @@ export default async function handler(req, res) {
     try {
       const response = await client.messages.create({
         model,
-        max_tokens: 900,
+        max_tokens: 2500,
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userContent }],
       })
