@@ -36,6 +36,12 @@ export interface OutputData {
 
 export type AppStatus = 'auth' | 'onboarding' | 'project_list' | 'interview' | 'generating' | 'done'
 
+export interface UploadedFile {
+  name: string
+  mimeType: string
+  data: string // base64 bez data URI prefixu
+}
+
 export interface SearchResult {
   title: string
   content: string

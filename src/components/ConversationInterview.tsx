@@ -5,11 +5,12 @@ import { useInterviewStore } from '../store/useInterviewStore'
 import { saveProject } from '../utils/storage'
 import { downloadConversation } from '../utils/exportConversation'
 import { ChatBubble } from './ChatBubble'
+import { DocumentUpload } from './DocumentUpload'
 import { LiveJsonPanel } from './LiveJsonPanel'
 import { OutputPanel } from './OutputPanel'
 import { ProgressBar } from './ProgressBar'
 import { SearchSuggestionCard } from './SearchSuggestionCard'
-import type { SearchState } from '../types'
+import type { SearchState, UploadedFile } from '../types'
 
 type Phase = 'waiting_for_client' | 'researching' | 'chatting' | 'error'
 
@@ -27,6 +28,8 @@ export function ConversationInterview() {
   const [inputValue, setInputValue] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
   const [searchStates, setSearchStates] = useState<Map<string, SearchState>>(new Map())
+  const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([])
+  const [showMidUpload, setShowMidUpload] = useState(false)
   const chatEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const initialized = useRef(false)
@@ -115,6 +118,148 @@ export function ConversationInterview() {
     })
   }
 
+  // ─── Document extraction (start) ────────────────────────────────────────────
+
+  async function runDocumentExtraction(companyName: string, files: UploadedFile[]) {
+    setPhase('researching')
+    setIsProcessing(true)
+    ensureProjectId()
+
+    const docMsgId = `doc-${Date.now()}`
+    addMessage({ id: docMsgId, role: 'ai', content: `Zpracovávám ${files.length > 1 ? `${files.length} dokumenty` : 'dokument'}…`, isTyping: true })
+
+    let draft: Partial<AccountPlan> = { nazevKlienta: companyName || undefined }
+    try {
+      const res = await fetch('/api/extract-docs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files, companyName }),
+      })
+      if (res.ok) {
+        const data = await res.json()
+        draft = { ...data.draft, ...(companyName ? { nazevKlienta: companyName } : {}) }
+        setResearchDraft(draft)
+      }
+    } catch {
+      // silently continue
+    }
+
+    updateMessage(docMsgId, { content: 'Dokumenty zpracovány. Připravuji otázky…', isTyping: true })
+
+    const clientName = draft.nazevKlienta ?? companyName ?? 'klient'
+    const bootstrap = [{ role: 'user' as const, content: `Klient: ${clientName}` }]
+    initChatHistory(bootstrap)
+
+    const typingId = `typing-${Date.now()}`
+    addMessage({ id: typingId, role: 'ai', content: '…', isTyping: true })
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: bootstrap, currentUser, initialData: draft }),
+      })
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}))
+        throw new Error(errBody.detail ?? `HTTP ${res.status}`)
+      }
+      const data = await res.json()
+
+      updateMessage(docMsgId, { content: `Dokumenty zpracovány.`, isTyping: false })
+      updateMessage(typingId, { content: data.reply, isTyping: false })
+      appendChatHistory({ role: 'assistant', content: data.reply })
+
+      if (data.searchQuery) void runSearch(typingId, data.searchQuery)
+
+      if (data.isComplete && data.extractedData) {
+        setExtractedData(data.extractedData)
+        await generateOutput(data.extractedData)
+        return
+      }
+
+      setPhase('chatting')
+      autosave('chatting')
+      setTimeout(() => inputRef.current?.focus(), 100)
+    } catch (err: any) {
+      updateMessage(docMsgId, { content: 'Zpracování dokumentů selhalo.', isTyping: false })
+      updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
+      setPhase('error')
+    }
+
+    setIsProcessing(false)
+  }
+
+  // ─── Document extraction (mid-interview) ────────────────────────────────────
+
+  async function runMidInterviewExtraction(files: UploadedFile[]) {
+    setShowMidUpload(false)
+    setIsProcessing(true)
+
+    const docMsgId = `doc-mid-${Date.now()}`
+    addMessage({ id: docMsgId, role: 'ai', content: `Zpracovávám dokument…`, isTyping: true })
+
+    let draft: Partial<AccountPlan> = {}
+    try {
+      const res = await fetch('/api/extract-docs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ files, companyName: researchDraft?.nazevKlienta ?? '' }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+      draft = data.draft ?? {}
+    } catch (err: any) {
+      updateMessage(docMsgId, { content: `Zpracování selhalo: ${err?.message ?? 'neznámá chyba'}`, isTyping: false })
+      setIsProcessing(false)
+      return
+    }
+
+    // Merge into store
+    const current = useInterviewStore.getState()
+    const merged = { ...(current.extractedData ?? {}), ...draft }
+    setExtractedData(merged)
+    setResearchDraft({ ...(current.researchDraft ?? {}), ...draft })
+
+    updateMessage(docMsgId, { content: 'Dokument zpracován.', isTyping: false })
+
+    // Inform Claude about the new document via a user message
+    const fileName = files.map((f) => f.name).join(', ')
+    const injectContent = `[Dokument: '${fileName}'] Přidal jsem tyto podklady:\n${JSON.stringify(draft, null, 2)}`
+
+    const newHistory = [...useInterviewStore.getState().chatHistory, { role: 'user' as const, content: injectContent }]
+    appendChatHistory({ role: 'user', content: injectContent })
+
+    const typingId = `typing-doc-${Date.now()}`
+    addMessage({ id: typingId, role: 'ai', content: '…', isTyping: true })
+
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: newHistory, currentUser, initialData: merged }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const data = await res.json()
+
+      updateMessage(typingId, { content: data.reply, isTyping: false })
+      appendChatHistory({ role: 'assistant', content: data.reply })
+
+      if (data.isComplete && data.extractedData) {
+        setExtractedData(data.extractedData)
+        await generateOutput(data.extractedData)
+        return
+      }
+
+      autosave('chatting')
+      setTimeout(() => inputRef.current?.focus(), 100)
+    } catch (err: any) {
+      updateMessage(typingId, { content: `Chyba: ${err?.message ?? 'neznámá'}`, isTyping: false })
+      setPhase('error')
+    }
+
+    setIsProcessing(false)
+  }
+
   // ─── Mid-interview search ────────────────────────────────────────────────────
 
   async function runSearch(messageId: string, query: string) {
@@ -167,7 +312,11 @@ export function ConversationInterview() {
 
     if (phase === 'waiting_for_client') {
       addMessage({ role: 'user', content: value })
-      await runResearch(value)
+      if (uploadedFiles.length > 0) {
+        await runDocumentExtraction(value, uploadedFiles)
+      } else {
+        await runResearch(value)
+      }
     } else {
       await sendChatMessage(value)
     }
@@ -401,6 +550,11 @@ export function ConversationInterview() {
         {/* Input */}
         {!isDone && !isGenerating && phase !== 'error' && (
           <div>
+            {/* Document upload at start */}
+            {phase === 'waiting_for_client' && (
+              <DocumentUpload onFilesChange={setUploadedFiles} />
+            )}
+
             <div className="flex gap-2 items-end">
               <textarea
                 ref={inputRef}
@@ -421,13 +575,32 @@ export function ConversationInterview() {
               </button>
             </div>
 
+            {/* Mid-interview controls */}
             {phase === 'chatting' && !inputDisabled && (
-              <button
-                onClick={() => sendChatMessage('přeskočit')}
-                className="mt-2 text-xs text-gray-400 underline hover:text-gray-600 transition-colors"
-              >
-                přeskočit téma
-              </button>
+              <div className="flex items-center gap-3 mt-2">
+                <button
+                  onClick={() => sendChatMessage('přeskočit')}
+                  className="text-xs text-gray-400 underline hover:text-gray-600 transition-colors"
+                >
+                  přeskočit téma
+                </button>
+                <span className="text-gray-200">·</span>
+                {showMidUpload ? (
+                  <DocumentUpload
+                    compact
+                    onFilesChange={(files) => {
+                      if (files.length > 0) runMidInterviewExtraction(files)
+                    }}
+                  />
+                ) : (
+                  <button
+                    onClick={() => setShowMidUpload(true)}
+                    className="text-xs text-gray-400 underline hover:text-gray-600 transition-colors"
+                  >
+                    přidat dokument
+                  </button>
+                )}
+              </div>
             )}
           </div>
         )}
