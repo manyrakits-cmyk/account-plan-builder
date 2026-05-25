@@ -1,5 +1,22 @@
 import type { AccountPlan } from './account-plan'
 
+export interface ConversationExport {
+  version: 1
+  type: 'account_plan_conversation'
+  metadata: {
+    clientName: string
+    accountOwner: string
+    projectId: string
+    exportedAt: string
+    status: AppStatus
+  }
+  messages: Message[]
+  chatHistory: ApiMessage[]
+  extractedData: Partial<AccountPlan> | null
+  researchDraft: Partial<AccountPlan> | null
+  outputData: OutputData | null
+}
+
 export interface Message {
   id: string
   role: 'ai' | 'user'

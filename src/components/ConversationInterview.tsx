@@ -3,7 +3,9 @@ import type { AccountPlan } from '../types/account-plan'
 import type { SavedProject } from '../types'
 import { useInterviewStore } from '../store/useInterviewStore'
 import { saveProject } from '../utils/storage'
+import { downloadConversation } from '../utils/exportConversation'
 import { ChatBubble } from './ChatBubble'
+import { LiveJsonPanel } from './LiveJsonPanel'
 import { OutputPanel } from './OutputPanel'
 import { ProgressBar } from './ProgressBar'
 
@@ -87,6 +89,27 @@ export function ConversationInterview() {
     }
     saveProject(project)
     void currentPhase // used only for naming clarity
+  }
+
+  // ─── Export conversation ─────────────────────────────────────────────────────
+
+  function handleDownloadConversation() {
+    const s = useInterviewStore.getState()
+    const clientName =
+      s.researchDraft?.nazevKlienta ??
+      s.messages.find((m) => m.role === 'user')?.content ??
+      'projekt'
+    downloadConversation({
+      clientName,
+      accountOwner: s.currentUser,
+      projectId: s.activeProjectId ?? `proj_${Date.now()}`,
+      status: s.status,
+      messages: s.messages,
+      chatHistory: s.chatHistory,
+      extractedData: s.extractedData,
+      researchDraft: s.researchDraft,
+      outputData: s.outputData,
+    })
   }
 
   // ─── Navigation ─────────────────────────────────────────────────────────────
@@ -298,12 +321,23 @@ export function ConversationInterview() {
                     : 'Konverzace probíhá'}
             </p>
           </div>
-          <button
-            onClick={handleBack}
-            className="text-xs text-gray-400 hover:text-gray-600 transition-colors mt-0.5"
-          >
-            ← Projekty
-          </button>
+          <div className="flex items-center gap-3">
+            {messages.length > 1 && (
+              <button
+                onClick={handleDownloadConversation}
+                className="text-xs text-gray-400 hover:text-gray-600 transition-colors"
+                title="Stáhnout celý rozhovor jako JSON"
+              >
+                Stáhnout rozhovor ↓
+              </button>
+            )}
+            <button
+              onClick={handleBack}
+              className="text-xs text-gray-400 hover:text-gray-600 transition-colors mt-0.5"
+            >
+              ← Projekty
+            </button>
+          </div>
         </div>
 
         {/* Section progress */}
@@ -372,6 +406,19 @@ export function ConversationInterview() {
           >
             ← Zpět na seznam projektů
           </button>
+        )}
+
+        {/* Live JSON preview during interview */}
+        {!isDone && !isGenerating && extractedData && (
+          <LiveJsonPanel
+            data={extractedData}
+            clientName={
+              researchDraft?.nazevKlienta ??
+              messages.find((m) => m.role === 'user')?.content ??
+              'projekt'
+            }
+            onDownloadConversation={handleDownloadConversation}
+          />
         )}
 
         {/* Output */}
