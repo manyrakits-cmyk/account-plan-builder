@@ -36,6 +36,18 @@ export interface OutputData {
 
 export type AppStatus = 'auth' | 'onboarding' | 'project_list' | 'interview' | 'generating' | 'done'
 
+export interface SearchResult {
+  title: string
+  content: string
+  url?: string
+}
+
+export interface SearchState {
+  status: 'loading' | 'done'
+  results?: SearchResult[]
+  answer?: string
+}
+
 export interface SavedProject {
   id: string
   clientName: string

@@ -8,6 +8,8 @@ import { ChatBubble } from './ChatBubble'
 import { LiveJsonPanel } from './LiveJsonPanel'
 import { OutputPanel } from './OutputPanel'
 import { ProgressBar } from './ProgressBar'
+import { SearchSuggestionCard } from './SearchSuggestionCard'
+import type { SearchState } from '../types'
 
 type Phase = 'waiting_for_client' | 'researching' | 'chatting' | 'error'
 
@@ -24,6 +26,7 @@ export function ConversationInterview() {
   const [phase, setPhase] = useState<Phase>('waiting_for_client')
   const [inputValue, setInputValue] = useState('')
   const [isProcessing, setIsProcessing] = useState(false)
+  const [searchStates, setSearchStates] = useState<Map<string, SearchState>>(new Map())
   const chatEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const initialized = useRef(false)
@@ -110,6 +113,28 @@ export function ConversationInterview() {
       researchDraft: s.researchDraft,
       outputData: s.outputData,
     })
+  }
+
+  // ─── Mid-interview search ────────────────────────────────────────────────────
+
+  async function runSearch(messageId: string, query: string) {
+    setSearchStates((prev) => new Map(prev).set(messageId, { status: 'loading' }))
+    try {
+      const res = await fetch('/api/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query }),
+      })
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      if (data.results?.length || data.answer) {
+        setSearchStates((prev) => new Map(prev).set(messageId, { status: 'done', results: data.results, answer: data.answer }))
+      } else {
+        setSearchStates((prev) => { const next = new Map(prev); next.delete(messageId); return next })
+      }
+    } catch {
+      setSearchStates((prev) => { const next = new Map(prev); next.delete(messageId); return next })
+    }
   }
 
   // ─── Navigation ─────────────────────────────────────────────────────────────
@@ -243,6 +268,10 @@ export function ConversationInterview() {
       updateMessage(typingId, { content: data.reply, isTyping: false })
       appendChatHistory({ role: 'assistant', content: data.reply })
 
+      if (data.searchQuery) {
+        void runSearch(typingId, data.searchQuery)
+      }
+
       if (data.isComplete && data.extractedData) {
         setExtractedData(data.extractedData)
         await generateOutput(data.extractedData)
@@ -346,7 +375,12 @@ export function ConversationInterview() {
         {/* Chat */}
         <div className="flex flex-col gap-3 mb-4 min-h-48">
           {messages.map((msg) => (
-            <ChatBubble key={msg.id} role={msg.role} content={msg.content} isTyping={msg.isTyping} />
+            <div key={msg.id}>
+              <ChatBubble role={msg.role} content={msg.content} isTyping={msg.isTyping} />
+              {msg.role === 'ai' && searchStates.has(msg.id) && (
+                <SearchSuggestionCard state={searchStates.get(msg.id)!} />
+              )}
+            </div>
           ))}
           <div ref={chatEndRef} />
         </div>

@@ -42,6 +42,13 @@ PRAVIDLA ROZHOVORU:
 - Rizika a oportunity: pokud jsou odpovědi příliš obecné, nabídni 1-2 příklady z IT agentury jako inspiraci
 - Governance: pokud chybí pravidelný steering, pojmenuj to jako riziko a zeptej se na záměr
 
+DOHLEDÁVÁNÍ ZA CHODU:
+Přesně jednou za celý rozhovor – při prvním přechodu na téma stakeholderů, rizik nebo příležitostí – přidej na konec své odpovědi tag:
+<search_query>konkrétní vyhledávací dotaz</search_query>
+
+Dotaz piš jako: "[nazevKlienta] CEO CTO management" / "[nazevKlienta] problémy 2024 2025 news" / "[nazevKlienta] rozvoj plány zakázky".
+Tag přidej jen jednou a jen tehdy, kdy přecházíš na jedno z těchto tří témat. Jinak ho vůbec nepoužívej.
+
 UKONČENÍ:
 Až budeš mít naplněna klíčová pole (stakeholdeři, governance, alespoň 1 riziko, alespoň 1 oportunita, alespoň 1 cíl), ukonči rozhovor přirozenou větou a vlož do své odpovědi JSON blok:
 <account_plan_json>
@@ -104,14 +111,21 @@ export default async function handler(req, res) {
       .join('')
 
     const tagMatch = text.match(/<account_plan_json>([\s\S]*?)<\/account_plan_json>/)
+    const searchMatch = text.match(/<search_query>([\s\S]*?)<\/search_query>/)
+    const searchQuery = searchMatch?.[1]?.trim() ?? null
+
+    const stripTags = (s) =>
+      s.replace(/<account_plan_json>[\s\S]*?<\/account_plan_json>/g, '')
+       .replace(/<search_query>[\s\S]*?<\/search_query>/g, '')
+       .trim()
+
     if (tagMatch) {
       const jsonRaw = tagMatch[1].trim().replace(/^```json|^```|```$/gm, '').trim()
       const extractedData = JSON.parse(jsonRaw)
-      const reply = text.replace(/<account_plan_json>[\s\S]*?<\/account_plan_json>/, '').trim()
-      return res.status(200).json({ reply, isComplete: true, extractedData })
+      return res.status(200).json({ reply: stripTags(text), isComplete: true, extractedData, searchQuery })
     }
 
-    return res.status(200).json({ reply: text, isComplete: false, extractedData: null })
+    return res.status(200).json({ reply: stripTags(text), isComplete: false, extractedData: null, searchQuery })
   } catch (err) {
     console.error('[chat]', err?.message ?? err)
     return res.status(500).json({ error: 'Chat failed', detail: String(err?.message ?? err) })
